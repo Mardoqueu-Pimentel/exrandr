@@ -1,0 +1,43 @@
+# ignore everything
+*
+
+# whitelist
+# !/directory: whitelist a directory
+# !/directory/*: whitelist files under directory
+# !/directory/**/*: whitelist subdirectories
+
+!/.github
+!/.github/*
+!/.github/**/*
+!/db
+!/db/*
+!/db/**
+!/src
+!/src/*
+!/src/**/*
+!/notebooks
+!/notebooks/*
+!/notebooks/**/*
+!.dockerignore
+!.gitignore
+!build.py
+!docker-compose.yml
+!Dockerfile
+!Makefile
+!poetry.lock
+!pyproject.toml
+!README.*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Extras
+*.egg-info
+nohup.out
+.ipynb_checkpoints
+Untitled*.ipynb
