@@ -1,46 +1,131 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
+import itertools
+import math
+import os
+import re
+
+import attr
 import click
 from attrs import define
-
-default_zoom = "1.0"
-default_gamma = "1.0"
-default_rotation = ""
-default_primary = ""
-
-default_values = [default_zoom, default_gamma, default_rotation, default_primary]
 
 
 @define
 class Display:
     name: str
-    width: int
-    height: int
+    physical_diagonal: float
+
+    height: float
+    aspect_ratio: float
+    viewport_height: float
+    viewport_aspect_ratio: float
+
     zoom: float
+
     gamma: float
     rotation: str
     primary: bool
 
+    def __attrs_post_init__(self):
+        if self.rotation:
+            self.rotate_z()
+
+    @property
+    def width(self):
+        return self.height * self.aspect_ratio
+
+    @property
+    def viewport_width(self):
+        return self.viewport_height * self.viewport_aspect_ratio
+
+    @property
+    def ppi(self):
+        n = self.height * (1 + self.aspect_ratio ** 2) ** (1 / 2)
+        return n / self.physical_diagonal
+
+    @property
+    def xrandr_scale(self):
+        return self.viewport_height / (self.width if self.rotation else self.height)
+
     @classmethod
     def from_str(cls, s: str):
-        args = s.split(",")
+        def unpack_and_make(
+            name: str, inches: str, res: str, zoom: str = "1.0",
+            gamma: str = "1.0",
+            rotation: str | None = None, primary: str | None = None
+        ):
+            width, height = map(float, res.split("x"))
+            return Display(
+                name=name,
+                physical_diagonal=float(inches),
+                height=height,
+                aspect_ratio=width / height,
+                viewport_height=height,
+                viewport_aspect_ratio=width / height,
+                zoom=float(zoom),
+                gamma=float(gamma),
+                rotation=rotation,
+                primary=eval(primary) if primary else False,
+            )
 
-        assert len(args) >= (k := 2)
-        if (n := len(args)) != 6:
-            args.extend(default_values[n - k :])
+        items = [arg.split("=") for arg in re.split(r", +| +", s)]
+        print(items)
+        kwargs = {k: v for k, v in items}
+        return unpack_and_make(**kwargs)
 
-        name, resolution, zoom, gamma, rotation, primary = args
-        width, height = resolution.split("x")
+    def ppi_scale(self, ppi: float):
+        height = ppi * self.physical_diagonal / (1 + self.aspect_ratio ** 2) ** (1 / 2)
+        return attr.evolve(self, viewport_height=self.viewport_height * (height / self.height))
 
-        return Display(
-            name,
-            int(width),
-            int(height),
-            float(zoom or default_zoom),
-            float(gamma or default_gamma),
-            rotation or default_rotation,
-            (primary or default_primary).lower() == "p",
-        )
+    def ui_scale(self, scale: float):
+        return attr.evolve(self, viewport_height=self.viewport_height * scale)
+
+    def rotate_z(self):
+        self.viewport_height = self.viewport_width
+        self.viewport_aspect_ratio = 1 / self.viewport_aspect_ratio
+
+    def as_dict(self):
+        return attr.asdict(self)
+
+    def as_xrandr_args(self, position: int):
+        yield "--output"
+        yield self.name
+        yield "--mode"
+        yield f"{self.width:.0f}x{self.height:.0f}"
+        yield "--scale"
+        yield f"{self.xrandr_scale}"
+        yield "--pos"
+        yield f"{position}x0"
+        yield "--gamma"
+        yield f"{self.gamma}"
+        if self.primary:
+            yield "--primary"
+
+    def __repr__(self, properties=()):
+        properties = properties or [
+            k for
+            k, v in self.__class__.__dict__.items()
+            if isinstance(v, property)
+        ]
+
+        d = self.as_dict()
+        keys = itertools.chain(d.items(), [(k, getattr(self, k)) for k in properties])
+
+        if len(attributes := ", ".join(f"{k}={v}" for k, v in keys)) >= 80:
+            attributes = attributes.replace(", ", "\n\t")
+
+        if len(result := f"{self.__class__.__name__}({attributes})") >= 80:
+            result = f"{self.__class__.__name__}(\n\t{attributes}\n)\n"
+
+        return result
+
+
+def int_or_float(x: str):
+    try:
+        return int(x)
+    except Exception:
+        return float(x)
 
 
 @click.command()
@@ -50,42 +135,34 @@ class Display:
     "displays",
     required=True,
     multiple=True,
-    help="Format: name,resolution,zoom,gamma,rotation,primary",
+    help="Format: name,inches,resolution,zoom,gamma,rotation,primary",
     callback=lambda _, __, xs: [Display.from_str(x) for x in xs],
 )
-def main(scale: int, displays: list[Display]):
+@click.option("--ppi", type=int_or_float, default="1")
+@click.option("--apply", is_flag=True, default=False)
+@click.option("-v", "--verbose", is_flag=True, default=False)
+def main(scale: int, displays: list[Display], ppi: float | int, apply: bool, verbose: bool):
+    assert ppi is None or ppi > 0
+
     cmd = ["xrandr"]
-    width_sum = 0.0
+    position = 0
+
+    if isinstance(ppi, int):
+        ppi = displays[ppi - 1].ppi
+
+    displays = [display.ui_scale(scale).ppi_scale(ppi) for display in displays]
+
     for display in displays:
-        partial = [
-            "--output",
-            display.name,
-            "--mode",
-            f"{display.width}x{display.height}",
-            "--scale",
-            str(xrandr_scale := scale / display.zoom),
-            "--pos",
-            f"{width_sum:.0f}x0",
-            "--gamma",
-            str(display.gamma),
-        ]
+        if verbose:
+            print(display)
+        cmd.append(" ".join(display.as_xrandr_args(position)))
+        position += round(display.viewport_width)
 
-        if display.rotation:
-            display.width, display.height = display.height, display.width
+    result = " \\\n\t".join(cmd) + ("" if apply else " | :")
+    click.echo(result)
 
-            partial.append("--rotation")
-            partial.append(display.rotation)
-
-        width_sum += display.width * xrandr_scale
-
-        if display.primary:
-            partial.append("--primary")
-
-        cmd.append(" ".join([str(x) for x in partial]))
-
-    result = " \\\n\t".join(cmd) + " | :"
-
-    print(result)
+    if apply:
+        os.system(result)
 
 
 def run():
