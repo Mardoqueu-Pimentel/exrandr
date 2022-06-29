@@ -28,8 +28,9 @@ class Display:
     primary: bool
 
     def __attrs_post_init__(self):
-        if self.rotation:
-            self.rotate_z()
+        if self.rotation in ("left", "right"):
+            self.viewport_height = self.viewport_width
+            self.viewport_aspect_ratio = 1 / self.viewport_aspect_ratio
 
     @property
     def width(self):
@@ -45,8 +46,16 @@ class Display:
         return n / self.physical_diagonal
 
     @property
-    def xrandr_scale(self):
-        return self.viewport_height / (self.width if self.rotation else self.height)
+    def viewport_ratio(self):
+        return self.zoomed_viewport_height / (self.width if self.rotation else self.height)
+
+    @property
+    def zoomed_viewport_height(self):
+        return self.viewport_height / self.zoom
+
+    @property
+    def zoomed_viewport_width(self):
+        return self.viewport_width / self.zoom
 
     @classmethod
     def from_str(cls, s: str):
@@ -70,7 +79,6 @@ class Display:
             )
 
         items = [arg.split("=") for arg in re.split(r", +| +", s)]
-        print(items)
         kwargs = {k: v for k, v in items}
         return unpack_and_make(**kwargs)
 
@@ -81,10 +89,6 @@ class Display:
     def ui_scale(self, scale: float):
         return attr.evolve(self, viewport_height=self.viewport_height * scale)
 
-    def rotate_z(self):
-        self.viewport_height = self.viewport_width
-        self.viewport_aspect_ratio = 1 / self.viewport_aspect_ratio
-
     def as_dict(self):
         return attr.asdict(self)
 
@@ -93,8 +97,11 @@ class Display:
         yield self.name
         yield "--mode"
         yield f"{self.width:.0f}x{self.height:.0f}"
+        if self.rotation:
+            yield "--rotate"
+            yield self.rotation
         yield "--scale"
-        yield f"{self.xrandr_scale}"
+        yield f"{self.viewport_ratio}"
         yield "--pos"
         yield f"{position}x0"
         yield "--gamma"
@@ -135,7 +142,15 @@ def int_or_float(x: str):
     "displays",
     required=True,
     multiple=True,
-    help="Format: name,inches,resolution,zoom,gamma,rotation,primary",
+    help="""
+    Format: 
+        S -> "name=<str>" "inches=<int>" "res=<3840>x<2160>" [OPT...]
+        OPT -> ZOOM | GAMMA | ROTATION | PRIMARY
+        ZOOM -> "zoom=<float>"
+        GAMMA -> "gamma=<float>"
+        ROTATION -> "rotation=<float>"
+        PRIMARY -> "primary=True"
+    """,
     callback=lambda _, __, xs: [Display.from_str(x) for x in xs],
 )
 @click.option("--ppi", type=int_or_float, default="1")
@@ -156,7 +171,7 @@ def main(scale: int, displays: list[Display], ppi: float | int, apply: bool, ver
         if verbose:
             print(display)
         cmd.append(" ".join(display.as_xrandr_args(position)))
-        position += round(display.viewport_width)
+        position += round(display.zoomed_viewport_width)
 
     result = " \\\n\t".join(cmd) + ("" if apply else " | :")
     click.echo(result)
