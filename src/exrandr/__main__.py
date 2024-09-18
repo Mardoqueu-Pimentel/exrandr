@@ -7,6 +7,7 @@ from collections import Counter
 import attrs
 import click
 from prettyprinter import cpprint
+import exrandr.cmd_factory
 
 
 @attrs.define
@@ -163,11 +164,21 @@ def process_displays(
     assert len(primary_displays) == 1, "One display must be primary"
     assert len(default_ppi_displays) <= 1, "At most one display must be default_ppi"
 
+    int_scale = int(scale)
+    if scale == int_scale:
+        cmd = exrandr.cmd_factory.gsettings_set_xsettings(int_scale=int_scale)
+        click.echo(f"$ {cmd}")
+        os.system(cmd)
+        cmd = exrandr.cmd_factory.gsettings_set_interface_scaling_factor(int_scale=int_scale)
+        click.echo(f"$ {cmd}")
+        os.system(cmd)
+
     displays = [d.scale(scale) for d in displays]
 
     if ppi is None:
         ppi = default_ppi_displays and default_ppi_displays[0].ppi or min(d.ppi for d in displays)
-    displays = [d.scale(ppi / d.ppi) for d in displays]
+    if ppi > 0.0:
+        displays = [d.scale(ppi / d.ppi) for d in displays]
 
     cmd = ["xrandr"]
     position = 0
