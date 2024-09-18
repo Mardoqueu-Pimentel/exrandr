@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import os
-from collections import Counter
+import subprocess
 
 import attrs
 import click
 from prettyprinter import cpprint
+
 import exrandr.cmd_factory
+import exrandr.pattern_factory
 
 
 @attrs.define
@@ -30,10 +32,10 @@ class Resolution:
                     raise ValueError("'x' separator not found")
                 return Resolution(width=float(width), height=float(height))
             except ValueError as exc:
-                self.fail(f"{value!r} is not a valid {self.name} -> {exc!r}", param, ctx)
-                raise
+                msg = f"{value!r} is not a valid {self.name} -> {exc!r}"
+                raise click.BadParameter(msg, ctx=ctx, param=param) from exc
 
-    aspect_ratio: float = attrs.field()
+    aspect_ratio: float | attrs.Attribute = attrs.field()
 
     @aspect_ratio.default
     def _(self):
@@ -51,14 +53,14 @@ class Display:
     primary: bool
     default_ppi: bool
 
-    ppi: float = attrs.field()
+    ppi: float | attrs.Attribute = attrs.field()
 
     @ppi.default
     def _(self):
         n = self.viewport.height * (1 + self.viewport.aspect_ratio ** 2) ** (1 / 2)
         return n / self.inches
 
-    vr: Resolution = attrs.field()
+    vr: Resolution | attrs.Attribute = attrs.field()
 
     @vr.default
     def _(self):
@@ -67,14 +69,14 @@ class Display:
     def as_dict(self):
         return attrs.asdict(self)
 
-    vppi: float = attrs.field()
+    vppi: float | attrs.Attribute = attrs.field()
 
     @vppi.default
     def _(self):
         n = self.vr.height * (1 + self.vr.aspect_ratio ** 2) ** (1 / 2)
         return n / self.inches
 
-    zoomed_vr_viewport_ratio: float = attrs.field()
+    zoomed_vr_viewport_ratio: float | attrs.Attribute = attrs.field()
 
     @zoomed_vr_viewport_ratio.default
     def _(self):
@@ -192,10 +194,16 @@ def process_displays(
         )
 
     result = " \\\n\t".join(cmd) + ("" if apply else " | :")
-    click.echo(result)
+    click.echo(f"$ {result}")
 
     if apply:
         os.system(result)
+        xrandr_result = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+        pattern = exrandr.pattern_factory.xrandr_display_line(d.name for d in displays)
+        if results := {
+            (d := match.groupdict()).pop("display"): d for match in pattern.finditer(xrandr_result)
+        }:
+            cpprint({"displays": results})
 
 
 def run():
